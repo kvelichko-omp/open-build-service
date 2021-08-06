@@ -58,16 +58,12 @@ class BsRequest < ApplicationRecord
   scope :by_package_reviews, ->(package_ids) { where(reviews: { package: package_ids }) }
   scope :by_group_reviews, ->(group_ids) { where(reviews: { group: group_ids }) }
 
-  scope :for_user, ->(params) { BsRequest::FindFor::User.new(params).all }
-  scope :for_group, ->(params) { BsRequest::FindFor::Group.new(params).all }
-  scope :for_project, ->(params) { BsRequest::FindFor::Project.new(params).all }
+  # FIXME: Get rid of this find_for scope since Rails 6.1, named scope chain does no longer leak scope to class-level querying methods
+  #        For details, see https://guides.rubyonrails.org/6_1_release_notes.html#active-record-notable-changes
   scope :find_for, ->(params) { BsRequest::FindFor::Query.new(params).all }
   scope :obsolete, -> { where(state: OBSOLETE_STATES) }
   scope :with_target_project, lambda { |target_project|
     includes(:bs_request_actions).where('bs_request_actions.target_project': target_project)
-  }
-  scope :new_with_reviews_for, lambda { |review_attributes|
-    where(state: 'new').where(id: Review.where(review_attributes).select(:bs_request_id)).includes(:reviews)
   }
   scope :with_open_reviews_for, lambda { |review_attributes|
     where(state: 'review', id: Review.where(review_attributes).where(state: 'new').select(:bs_request_id))
@@ -942,88 +938,15 @@ class BsRequest < ApplicationRecord
   end
 
   def webui_actions(opts = {})
-    # TODO: Fix!
     actions = []
-    with_diff = opts.delete(:diffs)
-    bs_request_actions.each do |xml|
-      action = { type: xml.action_type }
-      if xml.source_project
-        action[:sprj] = xml.source_project
-        action[:spkg] = xml.source_package if xml.source_package
-        action[:srev] = xml.source_rev if xml.source_rev
+    action_id = opts.delete(:action_id)
+    xml = bs_request_actions.find_by(id: action_id) if action_id
+    if xml
+      actions << action_details(opts, xml: xml)
+    else
+      bs_request_actions.each do |action|
+        actions << action_details(opts, xml: action)
       end
-      if xml.target_project
-        action[:tprj] = xml.target_project
-        action[:tpkg] = xml.target_package if xml.target_package
-        action[:trepo] = xml.target_repository if xml.target_repository
-      end
-      action[:releaseproject] = xml.target_releaseproject if xml.target_releaseproject
-
-      case xml.action_type # All further stuff depends on action type...
-      when :submit
-        action[:name] = "Submit #{action[:spkg]}"
-        superseded_bs_request_action = xml.find_action_with_same_target(opts[:diff_to_superseded])
-        action[:sourcediff] = xml.webui_infos(opts.merge(superseded_bs_request_action: superseded_bs_request_action)) if with_diff
-        creator = User.find_by_login(self.creator)
-        target_package = Package.find_by_project_and_name(action[:tprj], action[:tpkg])
-        action[:creator_is_target_maintainer] = true if creator.has_local_role?(Role.hashed['maintainer'], target_package)
-
-        if target_package
-          linkinfo = target_package.linkinfo
-          target_package.developed_packages.each do |dev_pkg|
-            action[:forward] ||= []
-            action[:forward] << { project: dev_pkg.project.name, package: dev_pkg.name, type: 'devel' }
-          end
-          if linkinfo
-            lprj = linkinfo['project']
-            lpkg = linkinfo['package']
-            link_is_already_devel = false
-            if action[:forward]
-              action[:forward].each do |forward|
-                if forward[:project] == lprj && forward[:package] == lpkg
-                  link_is_already_devel = true
-                  break
-                end
-              end
-            end
-            unless link_is_already_devel
-              action[:forward] ||= []
-              action[:forward] << { project: linkinfo['project'], package: linkinfo['package'], type: 'link' }
-            end
-          end
-        end
-
-      when :delete
-        action[:name] = if action[:tpkg]
-                          "Delete #{action[:tpkg]}"
-                        elsif action[:trepo]
-                          "Delete #{action[:trepo]}"
-                        else
-                          "Delete #{action[:tprj]}"
-                        end
-
-        if action[:tpkg] # API / Backend don't support whole project diff currently
-          action[:sourcediff] = xml.webui_infos if with_diff
-        end
-      when :add_role
-        action[:name] = 'Add Role'
-        action[:role] = xml.role
-        action[:user] = xml.person_name
-        action[:group] = xml.group_name
-      when :change_devel
-        action[:name] = 'Change Devel'
-      when :set_bugowner
-        action[:name] = 'Set Bugowner'
-        action[:user] = xml.person_name
-        action[:group] = xml.group_name
-      when :maintenance_incident
-        action[:name] = "Incident #{action[:spkg]}"
-        action[:sourcediff] = xml.webui_infos(superseded_bs_request_action: xml.find_action_with_same_target(opts[:diff_to_superseded])) if with_diff
-      when :maintenance_release, :release
-        action[:name] = "Release #{action[:spkg]}"
-        action[:sourcediff] = xml.webui_infos(superseded_bs_request_action: xml.find_action_with_same_target(opts[:diff_to_superseded])) if with_diff
-      end
-      actions << action
     end
     actions
   end
@@ -1073,6 +996,89 @@ class BsRequest < ApplicationRecord
   end
 
   private
+
+  def action_details(opts = {}, xml:)
+    with_diff = opts.delete(:diffs)
+    action = { type: xml.action_type }
+    action[:id] = xml.id
+    action[:number] = xml.bs_request.number
+    if xml.source_project
+      action[:sprj] = xml.source_project
+      action[:spkg] = xml.source_package if xml.source_package
+      action[:srev] = xml.source_rev if xml.source_rev
+    end
+    if xml.target_project
+      action[:tprj] = xml.target_project
+      action[:tpkg] = xml.target_package if xml.target_package
+      action[:trepo] = xml.target_repository if xml.target_repository
+    end
+    action[:releaseproject] = xml.target_releaseproject if xml.target_releaseproject
+    case xml.action_type # All further stuff depends on action type...
+    when :submit
+      action[:name] = "Submit #{action[:spkg]}"
+      superseded_bs_request_action = xml.find_action_with_same_target(opts[:diff_to_superseded])
+      action[:sourcediff] = xml.webui_infos(opts.merge(superseded_bs_request_action: superseded_bs_request_action)) if with_diff
+      creator = User.find_by_login(self.creator)
+      target_package = Package.find_by_project_and_name(action[:tprj], action[:tpkg])
+      action[:creator_is_target_maintainer] = true if creator.has_local_role?(Role.hashed['maintainer'], target_package)
+
+      if target_package
+        linkinfo = target_package.linkinfo
+        target_package.developed_packages.each do |dev_pkg|
+          action[:forward] ||= []
+          action[:forward] << { project: dev_pkg.project.name, package: dev_pkg.name, type: 'devel' }
+        end
+        if linkinfo
+          lprj = linkinfo['project']
+          lpkg = linkinfo['package']
+          link_is_already_devel = false
+          if action[:forward]
+            action[:forward].each do |forward|
+              if forward[:project] == lprj && forward[:package] == lpkg
+                link_is_already_devel = true
+                break
+              end
+            end
+          end
+          unless link_is_already_devel
+            action[:forward] ||= []
+            action[:forward] << { project: linkinfo['project'], package: linkinfo['package'], type: 'link' }
+          end
+        end
+      end
+
+    when :delete
+      action[:name] = if action[:tpkg]
+                        "Delete #{action[:tpkg]}"
+                      elsif action[:trepo]
+                        "Delete #{action[:trepo]}"
+                      else
+                        "Delete #{action[:tprj]}"
+                      end
+
+      if action[:tpkg] # API / Backend don't support whole project diff currently
+        action[:sourcediff] = xml.webui_infos if with_diff
+      end
+    when :add_role
+      action[:name] = 'Add Role'
+      action[:role] = xml.role
+      action[:user] = xml.person_name
+      action[:group] = xml.group_name
+    when :change_devel
+      action[:name] = 'Change Devel'
+    when :set_bugowner
+      action[:name] = 'Set Bugowner'
+      action[:user] = xml.person_name
+      action[:group] = xml.group_name
+    when :maintenance_incident
+      action[:name] = "Incident #{action[:spkg]}"
+      action[:sourcediff] = xml.webui_infos(superseded_bs_request_action: xml.find_action_with_same_target(opts[:diff_to_superseded])) if with_diff
+    when :maintenance_release, :release
+      action[:name] = "Release #{action[:spkg]}"
+      action[:sourcediff] = xml.webui_infos(superseded_bs_request_action: xml.find_action_with_same_target(opts[:diff_to_superseded])) if with_diff
+    end
+    action
+  end
 
   def apply_default_reviewers
     reviewers = collect_default_reviewers!
@@ -1216,7 +1222,7 @@ end
 #  creator            :string(255)      indexed
 #  description        :text(65535)
 #  number             :integer          indexed
-#  priority           :string(9)        default("moderate")
+#  priority           :string           default("moderate")
 #  state              :string(255)      indexed
 #  superseded_by      :integer          indexed
 #  updated_when       :datetime

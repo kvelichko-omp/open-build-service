@@ -37,7 +37,7 @@ These requests are not created for projects with open requests or if you remove 
     return unless cleanup_days && cleanup_days.positive?
 
     # defaults
-    User.find_by!(login: 'Admin').run_as do
+    User.get_default_admin.run_as do
       @cleanup_attribute = AttribType.find_by_namespace_and_name!('OBS', 'AutoCleanup')
       @cleanup_time = Time.zone.now + cleanup_days.days
 
@@ -88,10 +88,12 @@ These requests are not created for projects with open requests or if you remove 
     true
   end
 
-  def open_requests_count(project)
+  def open_requests_count(project_name)
+    OpenRequestsWithProjectAsSourceOrTargetFinder.new(relation, project_name).call.count
+  end
+
+  def relation
     BsRequest.in_states([:new, :review, :declined])
              .joins(:bs_request_actions)
-             .where('bs_request_actions.target_project = ? OR bs_request_actions.source_project = ?', project, project)
-             .count
   end
 end

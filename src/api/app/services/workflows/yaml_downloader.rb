@@ -2,11 +2,9 @@ module Workflows
   class YAMLDownloader
     MAX_FILE_SIZE = 1024 * 1024 # 1MB
 
-    attr_reader :errors
-
-    def initialize(scm_payload)
+    def initialize(scm_payload, token:)
       @scm_payload = scm_payload
-      @errors = []
+      @token = token
     end
 
     def call
@@ -18,16 +16,19 @@ module Workflows
     def download_yaml_file
       Down.download(download_url, max_size: MAX_FILE_SIZE)
     rescue Down::Error => e
-      @errors << e.message
+      raise Token::Errors::NonExistentWorkflowsFile, ".obs/workflows.yml could not be downloaded from the SCM branch #{@scm_payload[:target_branch]}: #{e.message}"
     end
 
     def download_url
       case @scm_payload[:scm]
       when 'github'
-        "https://raw.githubusercontent.com/#{@scm_payload[:repository_full_name]}/#{@scm_payload[:target_branch]}/.obs/workflows.yml"
+        client = Octokit::Client.new(access_token: @token.scm_token, api_endpoint: @scm_payload[:api_endpoint])
+        client.content("#{@scm_payload[:target_repository_full_name]}", path: '/.obs/workflows.yml')[:download_url]
       when 'gitlab'
-        "https://gitlab.com/#{@scm_payload[:path_with_namespace]}/-/raw/#{@scm_payload[:target_branch]}/.obs/workflows.yml"
+        "#{@scm_payload[:api_endpoint]}/#{@scm_payload[:path_with_namespace]}/-/raw/#{@scm_payload[:target_branch]}/.obs/workflows.yml"
       end
+    rescue Octokit::NotFound => e
+      raise Token::Errors::NonExistentWorkflowsFile, ".obs/workflows.yml could not be downloaded from the SCM branch #{@scm_payload[:target_branch]}: #{e.message}"
     end
   end
 end

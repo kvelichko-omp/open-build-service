@@ -148,7 +148,10 @@ sub check {
     my $haveobsrepositories = grep {$_->{'project'} eq '_obsrepositories'} @infopath;
     my @newpath;
     my $annotation = BSSched::BuildJob::getcontainerannotation($cpool, $lastp, $lastbdep);
-    if ($annotation && !$haveobsrepositories) {
+    if (!$annotation && !$haveobsrepositories) {
+      # no annotation, assume obsrepositories:/
+      push @newpath, {'project' => '_obsrepositories', 'repository' => ''};
+    } elsif ($annotation && !$haveobsrepositories) {
       # map all repos and add to path
       my $remoteprojs = $gctx->{'remoteprojs'} || {};
       my $rproj = $remoteprojs->{$lastbdep->{'project'}};
@@ -203,6 +206,7 @@ sub check {
     return ('broken', 'no config');
   }
   $bconf->{'type'} = 'docker';
+  $bconf->{'no_vminstall_expand'} = 1 if @{$repo->{'path'} || []};
 
   my $pool = BSSolv::pool->new();
   $pool->settype('deb') if $bconf->{'binarytype'} eq 'deb';
@@ -311,6 +315,8 @@ sub check {
   my ($state, $data) = BSSched::BuildJob::metacheck($ctx, $packid, $pdata, $buildtype, \@new_meta, [ $bconf, \@edeps, $pool, \%dep2pkg, \@cbdep, $unorderedrepos]);
   if ($state eq 'scheduled') {
     my $dods = BSSched::DoD::dodcheck($ctx, $pool, $myarch, @edeps);
+    return ('blocked', $dods) if $dods;
+    $dods = BSSched::DoD::dodcheck($ctx, $ctx->{'pool'}, $myarch, map {$_->{'name'}} @cbdep);
     return ('blocked', $dods) if $dods;
   }
   return ($state, $data);

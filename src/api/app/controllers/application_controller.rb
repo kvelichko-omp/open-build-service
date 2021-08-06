@@ -12,6 +12,7 @@ class ApplicationController < ActionController::Base
   include FlipperFeature
 
   include RescueHandler
+  include SetCurrentRequestDetails
 
   # session :disabled => true
 
@@ -299,7 +300,7 @@ class ApplicationController < ActionController::Base
     opt = params
     opt[:method] = method || request.method.to_s
     opt[:type] = 'request'
-    logger.debug "Validate XML request: #{request}"
+    logger.debug "Validate XML request: #{request.raw_post}"
     Suse::Validator.validate(opt, LazyRequestReader.new(request))
   end
 

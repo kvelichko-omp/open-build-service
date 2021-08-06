@@ -114,9 +114,14 @@ sub oracle {
     return 0 if $constraints->{'hardware'}->{'memoryperjob'} && getmbsize($constraints->{'hardware'}->{'memoryperjob'}) * ($worker->{'hardware'}->{'jobs'} || 1) > ( $memory + $swap );
     return 0 if $constraints->{'hardware'}->{'physicalmemory'} && getmbsize($constraints->{'hardware'}->{'physicalmemory'}) > $memory;
     if ($constraints->{'hardware'}->{'cpu'}) {
-      return 0 unless $worker->{'hardware'}->{'cpu'};
       my %workerflags = map {$_ => 1} @{$worker->{'hardware'}->{'cpu'}->{'flag'} || []};
-      return 0 if grep {!$workerflags{$_}} @{$constraints->{'hardware'}->{'cpu'}->{'flag'} || []};
+      for my $flag (@{$constraints->{'hardware'}->{'cpu'}->{'flag'} || []}) {
+        if ($flag->{'exclude'} && $flag->{'exclude'} eq 'true') {
+          return 0 if $workerflags{$flag->{'_content'}};
+        } else {
+          return 0 unless $workerflags{$flag->{'_content'}};
+        }
+      }
     }
   }
   return 1;
@@ -167,10 +172,7 @@ sub mergeconstraints {
         $con->{'hardware'}->{$el} = ref($con2->{'hardware'}->{$el}) ? BSUtil::clone($con2->{'hardware'}->{$el}) : $con2->{'hardware'}->{$el};
       }
       if ($con2->{'hardware'}->{'cpu'} && $con2->{'hardware'}->{'cpu'}->{'flag'}) {
-        my %oldflags = map {$_ => 1} @{$con->{'hardware'}->{'cpu'}->{'flag'} || []};
-        for (@{$con2->{'hardware'}->{'cpu'}->{'flag'}}) {
-          push @{$con->{'hardware'}->{'cpu'}->{'flag'}}, $_ unless $oldflags{$_};
-        }
+        push @{$con->{'hardware'}->{'cpu'}->{'flag'}}, @{$con2->{'hardware'}->{'cpu'}->{'flag'}};
       }
     }
   }
@@ -214,7 +216,7 @@ sub overwriteconstraints {
 
 # constructs a data object from a list and a XML::Structured dtd
 sub list2struct {
-  my ($dtd, $list, $job) = @_;
+  my ($dtd, $list) = @_;
   my $top = {};
   for my $l (@{$list || []}) {
     my @l = @$l;
@@ -223,13 +225,15 @@ sub list2struct {
       my @loc = split(':', shift @l);
       my @how = @$dtd;
       my $out = $top;
+      my $outref;
       while (@loc) {
         my $am = shift @how;
         my $e = shift @loc;
-        my $addit;
-        my $delit;
+        my ($addit, $delit, $modit);
         $addit = 1 if $e =~ s/\+$//;
         $delit = 1 if !$addit && $e =~ s/=$//;
+	$modit = 1 if !$addit && !$delit && $e =~ s/!$//;
+	$modit = 1 if !$addit && !$delit && @loc;	# default non-leaf elements
         my %known = map {ref($_) ? (!@$_ ? () : (ref($_->[0]) ? $_->[0]->[0] : $_->[0] => $_)) : ($_=> $_)} @how;
         my $ke = $known{$e};
         die("unknown element: $e\n") unless $ke;
@@ -241,25 +245,28 @@ sub list2struct {
         if (!ref($ke) || (@$ke == 1 && !ref($ke->[0]))) {
           die("element '$e' has subelements\n") if @loc;
           die("element '$e' contains attributes\n") if @l && $l[0] =~ /=/;
-          delete $out->{$e} unless $addit;
           if (!ref($ke)) {
+            delete $out->{$e} unless $addit;
             die("element '$e' must be singleton\n") if exists $out->{$e};
             $out->{$e} = join(' ', @l);
           } else {
+            delete $out->{$e} if $modit;
             push @{$out->{$e}}, @l;
           }
           @how = ();
         } else {
           my $nout = {};
           if (@$ke == 1) {
-            $nout = pop @{$out->{$e}} if exists $out->{$e} && !$addit;
+            $nout = pop @{$out->{$e}} if exists $out->{$e} && $modit;
             push @{$out->{$e}}, $nout;
             @how = @{$ke->[0]};
+	    $outref = $out->{$e};
           } else {
             $nout = delete $out->{$e} if exists $out->{$e} && !$addit;
             die("element '$e' must be singleton\n") if exists $out->{$e};
             $out->{$e} = $nout;
             @how = @$ke;
+	    $outref = undef;
           }
           $out = $nout;
         }
@@ -285,12 +292,14 @@ sub list2struct {
           shift @l;
         }
         if (@l) {
-          die("element '$am' contains content\n") unless $known{'_content'};
-          $out->{'_content'} = join(' ', @l);
+	  die("element '$am' contains content\n") unless $known{'_content'};
+	  @l = ( join(' ', @l) ) unless $outref;
+	  $out->{'_content'} = shift @l;
+	  push @$outref, BSUtil::clone({ %$out, '_content' => $_ }) for @l;
         }
       }
     };
-    warn("list2struct: $job: @$l: $@") if $@;
+    die("@$l: $@") if $@;
   }
   return $top;
 }

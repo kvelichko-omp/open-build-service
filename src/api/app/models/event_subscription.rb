@@ -21,11 +21,15 @@ class EventSubscription < ApplicationRecord
     scm: 4
   }
 
+  # Channels used by the event system, but not meant to be enabled by hand
+  INTERNAL_ONLY_CHANNELS = ['scm'].freeze
+
   serialize :payload, JSON
 
   belongs_to :user, inverse_of: :event_subscriptions
   belongs_to :group, inverse_of: :event_subscriptions
   belongs_to :token, inverse_of: :event_subscriptions
+  belongs_to :package
 
   validates :receiver_role, inclusion: {
     in: [:maintainer, :bugowner, :reader, :source_maintainer, :target_maintainer,
@@ -77,8 +81,8 @@ class EventSubscription < ApplicationRecord
       subscription_receiver_role: receiver_role }
   end
 
-  def self.without_channel_disabled
-    channels.keys.reject { |channel| channel == 'disabled' }
+  def self.without_disabled_or_internal_channels
+    channels.keys.reject { |channel| channel == 'disabled' || channel.in?(INTERNAL_ONLY_CHANNELS) }
   end
 end
 

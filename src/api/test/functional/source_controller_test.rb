@@ -1150,10 +1150,10 @@ class SourceControllerTest < ActionDispatch::IntegrationTest
     put '/source/home:tom:projectC/_meta', params: "<project name='home:tom:projectC'> <title/> <description/> <repository name='repoC'> <path project='home:tom:projectB' repository='repoB' /> </repository> </project>"
     assert_response :success
     put '/source/home:tom:projectD/_meta', params: "<project name='home:tom:projectD'> <title/> <description/> <repository name='repoD'> " \
-                                           " <path project='home:tom:projectA' repository='repoA' />" \
-                                           " <path project='home:tom:projectB' repository='repoB' />" \
-                                           " <path project='home:tom:projectC' repository='repoC' />" \
-                                           '</repository> </project>'
+                                                   " <path project='home:tom:projectA' repository='repoA' />" \
+                                                   " <path project='home:tom:projectB' repository='repoB' />" \
+                                                   " <path project='home:tom:projectC' repository='repoC' />" \
+                                                   '</repository> </project>'
     assert_response :success
     # delete a repo
     put '/source/home:tom:projectA/_meta', params: "<project name='home:tom:projectA'> <title/> <description/> </project>"
@@ -2625,10 +2625,10 @@ class SourceControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     orig_project_meta = @response.body
     doc = REXML::Document.new(@response.body)
-    person = doc.elements["/project'"].add_element 'person'
+    person = doc.elements['/project'].add_element 'person'
     person.add_attribute(REXML::Attribute.new('userid', 'adrian'))
     person.add_attribute(REXML::Attribute.new('role', 'maintainer'))
-    rt = doc.elements["/project/repository'"].add_element 'releasetarget'
+    rt = doc.elements['/project/repository'].add_element 'releasetarget'
     rt.add_attribute(REXML::Attribute.new('project', 'home:adrian:RT'))
     rt.add_attribute(REXML::Attribute.new('repository', 'rt'))
     put '/source/home:Iggy/_meta', params: doc.to_s
@@ -2735,7 +2735,7 @@ class SourceControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     orig_project_meta = @response.body
     doc = REXML::Document.new(@response.body)
-    rt = doc.elements["/project/repository'"].add_element 'releasetarget'
+    rt = doc.elements['/project/repository'].add_element 'releasetarget'
     rt.add_attribute(REXML::Attribute.new('project', 'home:adrian:RT'))
     rt.add_attribute(REXML::Attribute.new('repository', 'rt'))
     put '/source/home:Iggy/_meta', params: doc.to_s
@@ -2856,7 +2856,7 @@ class SourceControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     orig_project_meta = @response.body
     doc = REXML::Document.new(@response.body)
-    rt = doc.elements["/project/repository'"].add_element 'releasetarget'
+    rt = doc.elements['/project/repository'].add_element 'releasetarget'
     rt.add_attribute(REXML::Attribute.new('project', 'home:adrian:RT'))
     rt.add_attribute(REXML::Attribute.new('repository', 'rt'))
     put '/source/home:Iggy/_meta', params: doc.to_s
@@ -3412,7 +3412,7 @@ class SourceControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_xml_tag tag: 'collection', attributes: { matches: '1' }
     # no product, but no crash either. More checks are in channel_maintenance test case
-    get '/search/channel/binary?match=updatefor/[@project="not_defined"+and+@product="missing"]'
+    get '/search/channel/binary?match=updatefor[@project="not_defined"+and+@product="missing"]'
     assert_response :success
     assert_xml_tag tag: 'collection', attributes: { matches: '0' }
     # simple short form test

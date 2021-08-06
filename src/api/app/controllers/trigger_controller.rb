@@ -1,15 +1,18 @@
 class TriggerController < ApplicationController
   ALLOWED_GITLAB_EVENTS = ['Push Hook', 'Tag Push Hook', 'Merge Request Hook'].freeze
 
+  include Pundit
+
   # Authentication happens with tokens, so extracting the user is not required
   skip_before_action :extract_user
   # Authentication happens with tokens, so no login is required
   skip_before_action :require_login
   # GitLab/Github send data as parameters which are not strings
-  skip_before_action :validate_params
+  # e.g. integer PR number (GitHub) and project hash (GitLab)
+  skip_before_action :validate_params, if: :scm_webhook?
   after_action :verify_authorized
 
-  before_action :validate_gitlab_event
+  before_action :validate_gitlab_event, if: :gitlab_webhook?
   before_action :set_token
   before_action :set_project
   before_action :set_package
@@ -19,18 +22,30 @@ class TriggerController < ApplicationController
   include Trigger::Errors
 
   def create
-    authorize @token
+    authorize @token, :trigger?
     @token.user.run_as do
-      @token.call(project: @project, package: @package, repository: params[:repository], arch: params[:arch])
+      opts = { project: @project, package: @package, repository: params[:repository], arch: params[:arch] }
+      opts[:multibuild_flavor] = @multibuild_container if @multibuild_container.present?
+      @token.call(opts)
       render_ok
     end
   end
 
   private
 
-  def validate_gitlab_event
-    return unless request.env['HTTP_X_GITLAB_EVENT']
+  def gitlab_webhook?
+    request.env['HTTP_X_GITLAB_EVENT'].present?
+  end
 
+  def github_webhook?
+    request.env['HTTP_X_GITHUB_EVENT'].present?
+  end
+
+  def scm_webhook?
+    gitlab_webhook? || github_webhook?
+  end
+
+  def validate_gitlab_event
     raise InvalidToken unless request.env['HTTP_X_GITLAB_EVENT'].in?(ALLOWED_GITLAB_EVENTS)
   end
 
@@ -38,6 +53,10 @@ class TriggerController < ApplicationController
   def set_token
     @token = ::TriggerControllerService::TokenExtractor.new(request).call
     raise InvalidToken unless @token
+  end
+
+  def pundit_user
+    @token.user
   end
 
   def set_project
@@ -69,34 +88,16 @@ class TriggerController < ApplicationController
   end
 
   def set_object_to_authorize
-    # By default we authorize against the package we found in set_package
-    @token.object_to_authorize = @package
-    # And only if we consider multibuild or project links we might need to do more complicated things...
-    return unless @token.follow_links?
-
-    # We found a local package
-    @token.object_to_authorize = if @package.is_a?(Package)
-                                   # If the package is coming through a project link, we authorize the project
-                                   # See https://github.com/openSUSE/open-build-service/wiki/Links#project-links
-                                   package_from_project_link? ? @project : @package
-                                   # We did not find a local package, have to authorize the project
-                                 else
-                                   @project
-                                 end
+    @token.object_to_authorize = package_from_project_link? ? @project : @package
   end
 
   def set_multibuild_flavor
-    # Only if we consider multibuild or project links we might need to do more complicated things...
-    return unless @token.follow_links?
-    # @package is a String if @project has a project link, no need to do anything then.
-    return unless @package.is_a?(Package)
-
-    # We use the package parameter if it is a valid multibuild flavor of the package
-    # See https://github.com/openSUSE/open-build-service/wiki/Links#mulitbuild-packages
-    @package = params[:package] if @package.multibuild_flavor?(params[:package])
+    # Do NOT use @package.multibuild_flavor? here because the flavor need to be checked for the right source revision
+    @multibuild_container = params[:package].gsub(/.*:/, '') if params[:package].present? && params[:package].include?(':')
   end
 
   def package_from_project_link?
-    @package.project != @project
+    # a remote package is always included via project link
+    !(@package.is_a?(Package) && @package.project == @project)
   end
 end

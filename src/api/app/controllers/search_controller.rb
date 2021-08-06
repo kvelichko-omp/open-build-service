@@ -121,32 +121,6 @@ class SearchController < ApplicationController
     pred
   end
 
-  def filter_items(items)
-    begin
-      @offset = Integer(params[:offset])
-    rescue StandardError
-      @offset = 0
-    end
-    begin
-      @limit = Integer(params[:limit])
-    rescue StandardError
-      @limit = items.size
-    end
-    nitems = []
-    items.each do |item|
-      if @offset.positive?
-        @offset -= 1
-      else
-        nitems << item
-        if @limit
-          @limit -= 1
-          break if @limit.zero?
-        end
-      end
-    end
-    nitems
-  end
-
   # unfortunately read_multi hangs with just too many items
   # so maximize the keys to query
   def read_multi_workaround(keys)
@@ -186,9 +160,7 @@ class SearchController < ApplicationController
 
     logger.debug "searching in #{what}s, predicate: '#{predicate}'"
 
-    xe = XpathEngine.new
-
-    items = xe.find("/#{what}[#{predicate}]")
+    items = find_items(what, predicate)
 
     matches = items.size
 
@@ -198,6 +170,11 @@ class SearchController < ApplicationController
     end
 
     opts = {}
+
+    if what == :request
+      opts[:withhistory] = 1 if params[:withhistory]
+      opts[:withfullhistory] = 1 if params[:withfullhistory]
+    end
 
     output = "<collection matches=\"#{matches}\">\n"
 
@@ -209,43 +186,10 @@ class SearchController < ApplicationController
                    end
     search_items = filter_items_from_cache(items, xml, key_template)
 
-    includes = []
-    preloads = []
-    case what
-    when :package
-      relation = Package.where(id: search_items).order('projects.name', :name)
-      includes = [:project]
-    when :project
-      relation = Project.where(id: search_items).order(:name)
-      if render_all
-        includes = [:repositories]
-      else
-        relation = relation.select('projects.id,projects.name')
-      end
-    when :repository
-      relation = Repository.where(id: search_items)
-      includes = [:project]
-    when :request
-      relation = BsRequest.where(id: search_items).order(:id)
-      preloads = [:reviews, { review_history_elements: :user },
-                  { bs_request_actions: :bs_request_action_accept_info }]
-      opts[:withhistory] = 1 if params[:withhistory]
-      opts[:withfullhistory] = 1 if params[:withfullhistory]
-    when :person
-      relation = User.where(id: search_items).order(:login)
-    when :channel, :channel_binary
-      relation = ChannelBinary.where(id: search_items)
-    when :released_binary
-      relation = BinaryRelease.where(id: search_items)
-    when :issue
-      relation = Issue.where(id: search_items)
-      includes = [:issue_tracker]
-    else
-      logger.fatal "strange model: #{what}"
-    end
-    relation = relation.includes(includes).references(includes).preload(preloads)
+    search_finder = SearchFinder.new(what: what, search_items: search_items,
+                                     render_all: render_all, params: params)
 
-    # TODO: support sort_by and order parameters?
+    relation = search_finder.call
 
     unless items.empty?
       relation.each do |item|
@@ -284,24 +228,11 @@ class SearchController < ApplicationController
     attrib = AttribType.find_by_namespace_and_name!(namespace, name)
 
     # gather the relation for attributes depending on project/package combination
-    attribs = if params[:package] && params[:project]
-                Package.get_by_project_and_name(params[:project], params[:package]).attribs
-              elsif params[:package]
-                attrib.attribs.where(package_id: Package.where(name: params[:package]))
-              elsif params[:project]
-                attrib.attribs.where(package_id: Project.get_by_name(params[:project]).packages)
-              else
-                attrib.attribs
-              end
-
+    attribs = find_attribs(attrib, params[:project], params[:package])
     # get the values associated with the attributes and store them
     attribs = attribs.pluck(:id, :package_id)
     values = AttribValue.where(attrib_id: attribs.collect { |a| a[0] })
-    attrib_values = {}
-    values.each do |v|
-      attrib_values[v.attrib_id] ||= []
-      attrib_values[v.attrib_id] << v
-    end
+    attrib_values = group_attribute_values_by_attrib_id(values)
     # retrieve the package name and project for the attributes
     packages = Package.where('packages.id' => attribs.collect { |a| a[1] }).pluck(:id, :name, :project_id)
     pack2attrib = {}
@@ -330,5 +261,38 @@ class SearchController < ApplicationController
       end
     end
     render xml: xml
+  end
+
+  private
+
+  def filter_items(items)
+    offset = params.fetch(:offset, 0).to_i
+    limit = params.fetch(:limit, items.size).to_i
+    Kaminari.paginate_array(items, limit: limit, offset: offset)
+  end
+
+  def group_attribute_values_by_attrib_id(values)
+    attrib_values = {}
+    values.each do |v|
+      attrib_values[v.attrib_id] ||= []
+      attrib_values[v.attrib_id] << v
+    end
+    attrib_values
+  end
+
+  def find_attribs(attrib, project_name, package_name)
+    return attrib.attribs if project_name.blank? && package_name.blank?
+
+    return Package.get_by_project_and_name(project_name, package_name).attribs if project_name.present? && package_name.present?
+
+    if package_name
+      attrib.attribs.where(package_id: Package.where(name: package_name))
+    else # project_name
+      attrib.attribs.where(package_id: Project.get_by_name(project_name).packages)
+    end
+  end
+
+  def find_items(what, predicate)
+    XpathEngine.new.find("/#{what}[#{predicate}]")
   end
 end

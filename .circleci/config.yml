@@ -7,21 +7,21 @@ images:
       NOKOGIRI_USE_SYSTEM_LIBRARIES: 1
 
   - &mariadb
-    image: registry.opensuse.org/obs/server/unstable/container/ci/containers/openbuildservice/mariadb:latest
+    image: registry.opensuse.org/obs/server/unstable/containers/containers/openbuildservice/mariadb:latest
     command: |
       /bin/bash -c 'echo -e "[mysqld]\ndatadir = /dev/shm" > /etc/my.cnf.d/obs.cnf && cp -a /var/lib/mysql/* /dev/shm && /usr/lib/mysql/mysql-systemd-helper start'
     name: db
 
-  - &backend registry.opensuse.org/obs/server/unstable/container/ci/containers/openbuildservice/backend:latest
+  - &backend registry.opensuse.org/obs/server/unstable/containers/containers/openbuildservice/backend:latest
 
   - &frontend_backend
-    image: registry.opensuse.org/obs/server/unstable/container/ci/containers/openbuildservice/frontend-backend:latest
+    image: registry.opensuse.org/obs/server/unstable/containers/containers/openbuildservice/frontend-backend:latest
     <<: *common_frontend_config
     environment:
       EAGER_LOAD: 1
 
   - &frontend_base
-    image: registry.opensuse.org/obs/server/unstable/container/ci/containers/openbuildservice/frontend-base:latest
+    image: registry.opensuse.org/obs/server/unstable/containers/containers/openbuildservice/frontend-base:latest
     <<: *common_frontend_config
 
 aliases:
@@ -46,10 +46,28 @@ aliases:
     name: Setup application
     command: cd src/api; bundle exec rake dev:bootstrap[old_test_suite] RAILS_ENV=test FORCE_EXAMPLE_FILES=1
 
-  - &store_minitest_artefacts
+  - &store_minitest_artifacts
     store_artifacts:
       path: ./src/api/log/
       destination: minitest
+
+  - &store_minitest_test_results
+    store_test_results:
+      path: /home/frontend/minitest
+
+  - &store_rspec_artifacts
+    store_artifacts:
+      path: ./src/api/log
+      destination: rspec
+
+  - &store_rspec_test_results
+    store_test_results:
+      path: /home/frontend/rspec
+
+  - &store_capybara_artifacts
+    store_artifacts:
+      path: ./src/api/tmp/capybara
+      destination: capybara
 
   - &install_circle_cli
     name: Install CircleCI command line
@@ -85,7 +103,7 @@ jobs:
       - run:
           name: Run brakeman
           # Same brakeman version is pinned in our Dockerfile to have reproducible images (the license forbids us from shipping the gem in our appliance)
-          command: sudo gem install --no-format-executable brakeman --version 5.0.0; brakeman --rails6 -p src/api
+          command: sudo gem install --no-format-executable brakeman --version 5.0.2; brakeman --rails6 -p src/api
       - run:
           name: Setup application
           command: cd src/api; bundle exec rake dev:prepare assets:precompile RAILS_ENV=test FORCE_EXAMPLE_FILES=1
@@ -134,11 +152,8 @@ jobs:
           root: .
           paths:
             - src/api/coverage_results
-      - store_artifacts:
-          path: ./src/api/log
-          destination: rspec
-      - store_test_results:
-          path: /home/frontend/rspec
+      - <<: *store_rspec_artifacts
+      - <<: *store_rspec_test_results
 
   minitest:
     parallelism: 2
@@ -174,9 +189,8 @@ jobs:
           root: .
           paths:
             - src/api/coverage_results
-      - store_test_results:
-          path: /home/frontend/minitest
-      - <<: *store_minitest_artefacts
+      - <<: *store_minitest_test_results
+      - <<: *store_minitest_artifacts
 
   migrations_test:
     docker:
@@ -214,7 +228,7 @@ jobs:
           command: |
             cd src/api
             bundle exec rake test:spider
-      - <<: *store_minitest_artefacts
+      - <<: *store_minitest_artifacts
 
   backend_test:
     docker:
@@ -286,13 +300,11 @@ jobs:
       - store_artifacts:
           path: ./src/api/log
           destination: feature
-      - store_artifacts:
-          path: ./src/api/tmp/capybara
-          destination: capybara
+      - <<: *store_capybara_artifacts
       - store_test_results:
           path: /home/frontend/feature
 
-  next_rails:
+  next_rails-rspec:
     docker:
       - <<: *frontend_base
       - <<: *mariadb
@@ -308,9 +320,30 @@ jobs:
       - run:
           name: Run specs
           command: cd src/api && bundle exec rspec --format progress --format RspecJunitFormatter -o /home/frontend/rspec/rspec.db.xml
+      - <<: *store_rspec_artifacts
+      - <<: *store_rspec_test_results
+      - <<: *store_capybara_artifacts
+
+  next_rails-minitest:
+    docker:
+      - <<: *frontend_backend
+      - <<: *mariadb
+    environment:
+      BUNDLE_GEMFILE: Gemfile.next
+    steps:
+      - attach_workspace:
+         at: .
+      - run: *install_dependencies
+      - run: *init_git_submodule
+      - run: *wait_for_database
+      - run: *bootstrap_old_test_suite
       - run:
           name: Run minitest test suite
+          environment:
+            TESTOPTS: "--ci-dir=/home/frontend/minitest"
           command: cd src/api && bundle exec rake test:api:group1 test:api:group2
+      - <<: *store_minitest_test_results
+      - <<: *store_minitest_artifacts
 
 workflows:
   version: 2
@@ -342,7 +375,17 @@ workflows:
       - feature:
           requires:
             - checkout_code
-      - next_rails:
+      # next_rails jobs are split between RSpec and Minitest because they need a different setup
+      - next_rails-rspec:
+          requires:
+            - checkout_code
+          # Run this job on any upstream (not from a fork) branch starting with the prefix next_rails-
+          # This is to avoid slowing down our continuous integration for branches not related to the next Rails vervion update
+          filters:
+            branches:
+              only:
+                - /next_rails\-.*/
+      - next_rails-minitest:
           requires:
             - checkout_code
           # Run this job on any upstream (not from a fork) branch starting with the prefix next_rails-

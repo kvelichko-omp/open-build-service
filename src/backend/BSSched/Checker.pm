@@ -32,7 +32,9 @@ use BSSched::BuildResult;
 use BSSched::PublishRepo;
 use BSSched::BuildJob;
 use BSSched::Access;
+use BSSched::Modulemd;
 use BSSched::Remote;	# for addrepo_remote
+use BSSched::DoD;	# for signalmissing
 use BSSched::EventSource::Directory;
 
 use BSSched::BuildJob::Aggregate;
@@ -241,6 +243,23 @@ sub check_remote_repo_error {
   return undef;
 }
 
+sub neededdodresources {
+  my ($ctx, $repotype) = @_;
+  return () unless ($repotype || '') eq 'registry';
+  my $projpacks = $ctx->{'gctx'}->{'projpacks'};
+  my $projid = $ctx->{'project'};
+  my $repoid = $ctx->{'repository'};
+  my $proj = $projpacks->{$projid} || {};
+  my $pdatas = $proj->{'package'} || {};
+  my %needed;
+  for my $pdata (values %$pdatas) {
+    my $info = (grep {$_->{'repository'} eq $repoid} @{$pdata->{'info'} || []})[0];
+    next unless $info;
+    $needed{$_} = 1 for grep {/^container:/} @{$info->{'dep'} || []};
+  }
+  return sort keys %needed;
+}
+
 sub setup {
   my ($ctx) = @_;
   my $prp = $ctx->{'prp'};
@@ -365,8 +384,8 @@ sub setup {
     return (0, 'crosshostarch mismatch');
   }
 
+  # setup host data if doing cross builds
   if ($crosshostarch && $crosshostarch ne $myarch) {
-    # doing cross builds, setup host data
     if (!grep {$_ eq $crosshostarch} @{$repo->{'arch'} || []}) {
       return ('broken', "host arch $crosshostarch missing in repo architectures");
     }
@@ -385,6 +404,25 @@ sub setup {
     }
     $ctx->{'prpsearchpath_host'} = $prpsearchpath_host;
     $ctx->{'conf_host'} = $bconf_host;
+  }
+
+  # check for modulemd data
+  if ($pdatas->{'modulemd'} && $pdatas->{'modulemd'}->{'modulemd'}) {
+    my $pdata = $pdatas->{'modulemd'};
+    my $modulemd = $pdata->{'modulemd'};
+    my $dependency = BSSched::Modulemd::select_dependency($bconf, $modulemd) || {};
+    return ('broken', 'cannot build this module') unless $dependency;
+    my $errors = BSSched::Modulemd::extend_modules($bconf, $dependency->{'buildrequires'} || []);
+    return ('broken', join(', ', @$errors)) if $errors;
+    my $ml = BSSched::Modulemd::calc_modularitylabel($bconf, $modulemd->{'name'}, $modulemd->{'stream'}, $modulemd->{'timestamp'}, $dependency->{'requires'} || []);
+    return ('broken', 'modularitylabel calculation failed') unless $ml;
+    my @ml = split(':', $ml, 4);
+    $ctx->{'modularity_label'} = $ml;
+    $ctx->{'modularity_package'} = 'modulemd';
+    $ctx->{'modularity_srcmd5'} = $pdata->{'srcmd5'};
+    $ctx->{'modularity_meta'} = Digest::MD5::md5_hex("$ml[0]:$ml[1]:$ml[3]:$pdata->{'srcmd5'}")."  $ctx->{'modularity_package'}";
+    $ctx->{'modularity_extramacros'} = $modulemd->{'macros'} if $modulemd->{'macros'};
+    $ctx->{'modularity_platform'} = $bconf->{'buildflags:modulemdplatform'};
   }
 
   return ('scheduling', undef);
@@ -728,7 +766,7 @@ sub expandandsort {
     }
     $pkg2src{$packid} = $info->{'name'};
 
-    if ($pdata->{'hasbuildenv'}) {
+    if ($pdata->{'hasbuildenv'} || $info->{'hasbuildenv'}) {
       $pdeps{$packid} = [];
       next;
     }
@@ -1137,6 +1175,16 @@ sub checkpkgs {
       next;
     }
 
+    # check if we have all the dod resources
+    if ($ctx->{'missingdodresources'}) {
+      my @missing = grep {$ctx->{'missingdodresources'}->{$_}} @{$info->{'dep'} || []};
+      if (@missing) {
+        $packstatus{$packid} = 'blocked';
+        $packerror{$packid} = "waiting for dod resources to appear: @missing";
+	next;
+      }
+    }
+
     # all checks ok, dispatch to handler
     my $handler = $handlers{$buildtype} || $handlers{default};
     my ($astatus, $aerror) = $handler->check($ctx, $packid, $pdata, $info, $buildtype);
@@ -1242,6 +1290,11 @@ sub checkpkgs {
     unlink("$gdst/:packstatus.finished");
   }
   BSRedisnotify::updateresult("$prp/$myarch", \%packstatus, \%packerror, \%building) if $BSConfig::redisserver;
+
+  # write lastcheck file if we spent more than 2 minutes
+  if ($ctx->{'prpchecktime'} > 2 * 60 && $ctx->{'nharder'} > 10 && %{$ctx->{'lastcheck'} || {}}) {
+    BSUtil::store("$gdst/.:lastcheck", "$gdst/:lastcheck", $ctx->{'lastcheck'});
+  }
 
   my $schedulerstate;
   if (keys %building) {
@@ -1381,31 +1434,59 @@ sub checkprpaccess {
   return BSSched::Access::checkprpaccess($ctx->{'gctx'}, $prp, $ctx->{'prp'});
 }
 
+sub checkdodresources {
+  my ($ctx, $prp, $arch, $r) = @_;
+  return unless defined &BSSolv::repo::dodresources;
+  my $gctx = $ctx->{'gctx'};
+  my $dodrepotype = BSSched::ProjPacks::getdodrepotype($gctx, $prp);
+  return unless $dodrepotype;
+  my $dodresources = $ctx->{'dodresources'}->{$dodrepotype};
+  if (!$dodresources) {
+    $dodresources = $ctx->{'dodresources'}->{$dodrepotype} = [ neededdodresources($ctx, $dodrepotype) ];
+  }
+  return unless @{$dodresources || []};
+  return if $arch ne $gctx->{'arch'};		# not yet
+  my %reporesources = map {$_ => 1} $r->dodresources();
+  my @missing = grep {!$reporesources{$_}} @$dodresources;
+  return unless @missing;
+  print "    missig dod resources: @missing\n";
+  $ctx->{'missingdodresources'} = { %{$ctx->{'missingdodresources'} || {}}, map {$_ => 1} @missing };
+  my $alldodresources = BSSched::ProjPacks::neededdodresources($gctx, $prp) || [];
+  $alldodresources = [ BSUtil::unify(@$alldodresources, @$dodresources) ];
+  BSSched::DoD::signalmissing($ctx, $prp, $arch, $alldodresources);
+}
+
 sub addrepo {
   my ($ctx, $pool, $prp, $arch) = @_;
   my $gctx = $ctx->{'gctx'};
   $arch ||= $gctx->{'arch'};
+
   # first check the cache
   my $r = $gctx->{'repodatas'}->addrepo($pool, $prp, $arch);
-  return $r if $r || !defined($r);
+  return undef unless defined $r;
+  # make sure that we know all of the resources we need
+  checkdodresources($ctx, $prp, $arch, $r) if $r && $r->dodurl();
+  return $r if $r;
+
   # not in cache. scan/fetch.
   my ($projid, $repoid) = split('/', $prp, 2);
   my $remoteprojs = $gctx->{'remoteprojs'};
   if ($remoteprojs->{$projid}) {
-    return BSSched::Remote::addrepo_remote($ctx, $pool, $prp, $arch, $remoteprojs->{$projid});
-  }
-  if ($arch ne $gctx->{'arch'}) {
+    $r = BSSched::Remote::addrepo_remote($ctx, $pool, $prp, $arch, $remoteprojs->{$projid});
+  } elsif ($arch ne $gctx->{'arch'}) {
     my $alien_cache = $ctx->{'alien_repo_cache'};
     $alien_cache = $ctx->{'alien_repo_cache'} = {} unless $alien_cache;
     $r = $pool->repofromstr($prp, $alien_cache->{"$prp/$arch"}) if exists $alien_cache->{"$prp/$arch"};
     if (!$r) {
-      # needs some mem, but it's hopefully worth it
       $r = BSSched::BuildRepo::addrepo_scan($gctx, $pool, $prp, $arch);
+      # needs some mem, but it's hopefully worth it
       $alien_cache->{"$prp/$arch"} = $r->tostr() if $r;
     }
-    return $r;
+  } else {
+    $r = BSSched::BuildRepo::addrepo_scan($gctx, $pool, $prp, $arch);
   }
-  return BSSched::BuildRepo::addrepo_scan($gctx, $pool, $prp, $arch);
+  checkdodresources($ctx, $prp, $arch, $r) if $r && $r->dodurl();
+  return $r;
 }
 
 sub read_gbininfo {

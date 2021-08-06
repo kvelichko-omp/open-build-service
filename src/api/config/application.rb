@@ -1,6 +1,14 @@
 require_relative 'boot'
 
-require 'rails/all'
+require 'rails'
+require 'active_model/railtie'
+require 'active_job/railtie'
+require 'active_record/railtie'
+require 'action_mailer/railtie'
+require 'action_controller/railtie'
+require 'action_view/railtie'
+require 'sprockets/railtie'
+require 'rails/test_unit/railtie'
 
 # Assets should be precompiled for production (so we don't need the gems loaded then)
 Bundler.require(*Rails.groups(assets: ['development', 'test']))
@@ -108,5 +116,17 @@ module OBSApi
       g.test_framework :rspec
       g.orm :active_record, primary_key_type: :integer
     end
+
+    # View components
+    # Previews are enabled by default in development and test environments (this is the default value)
+    # config.view_component.show_previews = true
+    # Preview classes of view components live in:
+    config.view_component.preview_paths << Rails.root.join('spec/components/previews')
+    # Previews are served at http://HOST:PORT/rails/view_components (this is the default value)
+    # config.view_component.preview_route = "/rails/view_components"
+    # Set the default layout for previews (app/views/layouts/NAME.html.haml)
+    config.view_component.default_preview_layout = 'view_component_previews'
+    # Below the preview, display a syntax highlighted source code example of the usage of the view component
+    config.view_component.show_previews_source = true
   end
 end

@@ -1,6 +1,5 @@
 # rubocop:disable Metrics/ClassLength
 class Project < ApplicationRecord
-  include AppendSphinxCallbacks
   include FlagHelper
   include Flag::Validations
   include CanRenderModel
@@ -12,6 +11,7 @@ class Project < ApplicationRecord
   include Project::Errors
   include StagingProject
   include ProjectLinks
+  include ProjectDistribution
 
   TYPES = ['standard', 'maintenance', 'maintenance_incident',
            'maintenance_release'].freeze
@@ -21,6 +21,8 @@ class Project < ApplicationRecord
   after_destroy_commit :delete_on_backend
 
   after_save :discard_cache
+  after_save :populate_to_sphinx
+
   after_rollback :reset_cache
   after_rollback :discard_cache
 
@@ -99,27 +101,13 @@ class Project < ApplicationRecord
   }
 
   scope :remote, -> { where('NOT ISNULL(projects.remoteurl)') }
-  scope :local, -> { where.not('NOT ISNULL(projects.remoteurl)') }
+  scope :local, -> { where('ISNULL(projects.remoteurl)') }
 
-  scope :autocomplete, ->(search) { AutocompleteFinder::Project.new(Project.default_scoped, search).call }
-
-  # will return all projects with attribute 'OBS:ImageTemplates'
-  # FIXME: still generates deprecation warning
-  scope :local_image_templates, lambda {
-    ProjectsWithImageTemplatesFinder.new.call
-  }
-  # will return all projects with attribute 'OBS:DelegateRequestTarget'
-  scope :delegates_requests, lambda {
-    ProjectsWithDelegateRequestTargetFinder.new.call
-  }
-
+  scope :autocomplete, ->(search, local = false) { AutocompleteFinder::Project.new(local ? Project.local : Project.default_scoped, search).call }
   scope :for_user, ->(user_id) { joins(:relationships).where(relationships: { user_id: user_id, role_id: Role.hashed['maintainer'] }) }
   scope :related_to_user, ->(user_id) { joins(:relationships).where(relationships: { user_id: user_id }) }
   scope :for_group, ->(group_id) { joins(:relationships).where(relationships: { group_id: group_id, role_id: Role.hashed['maintainer'] }) }
   scope :related_to_group, ->(group_id) { joins(:relationships).where(relationships: { group_id: group_id }) }
-  scope :very_important_projects_with_attributes, lambda {
-    ProjectsWithVeryImportantAttributeFinder.new.call
-  }
 
   validates :name, presence: true, length: { maximum: 200 }, uniqueness: { case_sensitive: true }
   validates :title, length: { maximum: 250 }
@@ -180,7 +168,7 @@ class Project < ApplicationRecord
     end
 
     def image_templates
-      local_image_templates + remote_image_templates
+      ProjectsWithImageTemplatesFinder.new.call + remote_image_templates
     end
 
     def remote_image_templates
@@ -270,12 +258,17 @@ class Project < ApplicationRecord
     end
 
     def get_maintenance_project(at = nil)
-      # hardcoded default. frontends can lookup themselfs a different target via attribute search
       at ||= AttribType.find_by_namespace_and_name!('OBS', 'MaintenanceProject')
       maintenance_project = Project.find_by_attribute_type(at).first
-      unless maintenance_project && check_access?(maintenance_project)
-        raise Project::Errors::UnknownObjectError, 'There is no project flagged as maintenance project on server and no target in request defined.'
-      end
+
+      return unless maintenance_project && check_access?(maintenance_project)
+
+      maintenance_project
+    end
+
+    def get_maintenance_project!(at = nil)
+      maintenance_project = get_maintenance_project(at)
+      raise Project::Errors::UnknownObjectError, 'There is no project flagged as maintenance project on server and no target in request defined.' unless maintenance_project
 
       maintenance_project
     end
@@ -464,7 +457,7 @@ class Project < ApplicationRecord
     end
 
     def very_important_projects_with_categories
-      very_important_projects_with_attributes.map do |p|
+      ProjectsWithVeryImportantAttributeFinder.new.call.map do |p|
         [p.name, p.title, p.categories]
       end
     end
@@ -512,11 +505,6 @@ class Project < ApplicationRecord
   def add_maintainer(user)
     add_user(user, 'maintainer')
     store
-  end
-
-  # Check if the project has a path_element matching project and repository
-  def has_distribution(project_name, repository)
-    has_local_distribution(project_name, repository) || has_remote_distribution(project_name, repository)
   end
 
   def number_of_build_problems
@@ -785,6 +773,11 @@ class Project < ApplicationRecord
       package.commit_opts = { no_backend_write: 1, project_destroy_transaction: 1, request: commit_opts[:request] }
       package.destroy
     end
+  end
+
+  # Remove distributions based on this project
+  def cleanup_distributions
+    Distribution.remote.for_project(name).destroy_all
   end
 
   # Give me the first ancestor of that project
@@ -1312,7 +1305,7 @@ class Project < ApplicationRecord
 
   # for the clockworkd - called delayed
   def update_packages_if_dirty
-    packages.dirty_backend_package.each(&:update_if_dirty)
+    PackagesFinder.new(packages).dirty_backend_packages.each(&:update_if_dirty)
   end
 
   def lock(comment = nil)
@@ -1560,24 +1553,13 @@ class Project < ApplicationRecord
     revoke_requests # Revoke all requests that have this project as source/target
     cleanup_packages # Deletes packages (only in DB)
 
+    cleanup_distributions
+
     repositories.each(&:mark_for_destruction)
   end
 
   def discard_cache
     Relationship.discard_cache
-  end
-
-  def has_remote_distribution(project_name, repository)
-    linked_repositories.remote.any? do |linked_repository|
-      project_name.end_with?(linked_repository.remote_project_name) && linked_repository.name == repository
-    end
-  end
-
-  def has_local_distribution(project_name, repository)
-    linked_repositories.not_remote.any? do |linked_repository|
-      linked_repository.project.name == project_name &&
-        linked_repository.name == repository
-    end
   end
 
   def status_reports(checkables)
@@ -1604,6 +1586,14 @@ class Project < ApplicationRecord
   def calculate_missing_checks
     combined_status_reports.map(&:missing_checks).flatten
   end
+
+  def populate_to_sphinx
+    if new_record? ||
+       title_previously_changed? ||
+       description_previously_changed?
+      PopulateToSphinxJob.perform_later(id: id, model_name: :project)
+    end
+  end
 end
 
 # rubocop:enable Metrics/ClassLength
@@ -1615,7 +1605,7 @@ end
 #  id                  :integer          not null, primary key
 #  delta               :boolean          default(TRUE), not null
 #  description         :text(65535)
-#  kind                :string(20)       default("standard")
+#  kind                :string           default("standard")
 #  name                :string(200)      not null, indexed
 #  remoteproject       :string(255)
 #  remoteurl           :string(255)

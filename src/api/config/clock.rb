@@ -22,17 +22,19 @@ module Clockwork
     end
   end
 
-  every(30.seconds, 'status.refresh') do
+  every(30.seconds, 'refresh workerstatus') do
+    Rails.cache.write('workerstatus', Backend::Api::BuildResults::Worker.status)
     # this should be fast, so don't delay
-    WorkerStatus.new.update_workerstatus_cache
+    WorkerStatus.new.save
   end
 
   every(30.seconds, 'send notifications') do
     SendEventEmailsJob.perform_later
   end
 
-  every(5.minutes, 'measurements') do
+  every(5.minutes, 'send measurements') do
     MeasurementsJob.perform_later
+    WorkerMeasurementsJob.perform_later
   end
 
   every(49.minutes, 'rescale history') do
@@ -46,6 +48,10 @@ module Clockwork
   every(1.hour, 'accept requests') do
     User.session = User.get_default_admin
     BsRequest.delayed_auto_accept
+  end
+
+  every(1.hour, 'refresh remote distros') do
+    FetchRemoteDistributionsJob.perform_later
   end
 
   every(1.day, 'optimize history', thread: true, at: '05:00') do

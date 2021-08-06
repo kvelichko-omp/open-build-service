@@ -83,31 +83,29 @@ XmlResult: issue
 
 GET /distributions
 
-  Get the list of base distributions hosted on this OBS instance
+  Get all the base distributions hosted on this OBS instance
 
 XmlResult: distributions
-
-
-PUT /distributions
-
-  Write the list of base distributions hosted on this OBS instance
-
-XmlResult: distributions
-
 
 GET /distributions/<distribution_id>
 
-  Get data of one base distributions hosted on this OBS instance
+  Get a base distribution hosted on this OBS instance
 
+XmlResult: distribution
+
+POST /distributions/
+
+  Creates a base distribution
+
+XmlBody: distribution
 XmlResult: status
 
+PUT /distributions/<distribution_id>
 
-POST /distributions/<distribution_id>
+  Updates a base distribution. Note: Updating distribution from remote is not allowed.
 
-  Modifies one base distribution entry. Distro must be hosted on the OBS instance
-
+XmlBody: distribution
 XmlResult: status
-
 
 GET /distributions/include_remotes
 
@@ -115,6 +113,12 @@ GET /distributions/include_remotes
 
 XmlResult: distributions
 
+POST /distributions/bulk_replace
+
+  Replace all the base distributions hosted on this OBS instance
+
+XmlBody: distributions
+XmlResult: status
 
 == User data
 
@@ -1840,34 +1844,11 @@ GET /statistics/most_active_packages?limit=<limit>
 XmlResult: most_active_packages
 
 
-GET /statistics/download_counter?limit=<limit>
-  Get download counters for top downloaded files including to which project,
-  package, repository and architecture they belong.
-XmlResult: download_counter
-
-
-GET /statistics/download_counter?group_by=<group_by>&limit=<limit>
-  Get summarized download counters for top downloaded projects, packages,
-  repositories or architectures (by setting group_by parameter to project,
-  package, repo or arch) including count of files that belong to the respective
-  object.
-XmlResult: download_counter_summary
-
-
 PUT /statistics/redirect_stats
   Send download statistics from the openSUSE download redirector to the build
   service api, to update the download_counter database.
   User needs to have appropriate permissions.
 XmlResult: redirect_stats
-
-
-GET /statistics/newest_stats
-  Get the timestamp of the newest stats in build service. This is useful for the
-  create_stats_xml.rb script. Using this value it can import only those
-  statistics that changed from the last import of statistics.
-  If there are no statistics yet, returns "1970-01-01T01:00:00+01:00"
-XmlResult: newest_stats
-
 
 
 == Status Messages

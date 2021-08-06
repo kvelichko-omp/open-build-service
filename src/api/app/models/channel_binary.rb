@@ -6,7 +6,7 @@ class ChannelBinary < ApplicationRecord
 
   validate do |channel_binary|
     if channel_binary.project && channel_binary.repository
-      errors.add_to_base('Associated project has to match with repository.project') unless channel_binary.repository.project == channel_binary.project
+      errors.add(:base, :invalid, message: 'Associated project has to match with repository.project') unless channel_binary.repository.project == channel_binary.project
     end
   end
 
@@ -18,7 +18,7 @@ class ChannelBinary < ApplicationRecord
     project = Project.find_by_name(project) if project.is_a?(String)
 
     # find maintained projects filter
-    maintained_projects = Project.get_maintenance_project.expand_maintained_projects
+    maintained_projects = Project.get_maintenance_project!.expand_maintained_projects
 
     # gsub(/\s+/, "") makes sure there are no additional newlines and whitespaces
     query = <<-SQL.squish.gsub(/\s+/, ' ')

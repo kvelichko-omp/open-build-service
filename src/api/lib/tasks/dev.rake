@@ -3,7 +3,7 @@
 require 'fileutils'
 require 'yaml'
 
-ENABLED_FEATURE_FLAGS = [:notifications_redesign, :user_profile_redesign].freeze
+ENABLED_FEATURE_FLAGS = [:notifications_redesign, :user_profile_redesign, :trigger_workflow].freeze
 
 namespace :dev do
   task :prepare do
@@ -269,7 +269,7 @@ namespace :dev do
       end
 
       iggy = create(:confirmed_user, login: 'Iggy')
-      admin = User.where(login: 'Admin').first
+      admin = User.get_default_admin
       User.session = admin
 
       interconnect = create(:project, name: 'openSUSE.org', remoteurl: 'https://api.opensuse.org/public')

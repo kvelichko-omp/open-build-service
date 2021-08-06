@@ -3,13 +3,13 @@
 # contained rails app generating files in the git checkout with
 # some strange user...
 
-FROM registry.opensuse.org/obs/server/unstable/container/leap151/containers/openbuildservice/frontend-base
+FROM registry.opensuse.org/obs/server/unstable/containers/containers/openbuildservice/frontend-base
 ARG CONTAINER_USERID
 
 # for lint task
 RUN npm install -g jshint
 # Same brakeman version is pinned in our CI configuration to have reproducible builds (the license forbids us from shipping the gem in our appliance)
-RUN gem install --no-format-executable brakeman --version 5.0.0
+RUN gem install --no-format-executable brakeman --version 5.0.2
 
 # Configure our user
 RUN usermod -u $CONTAINER_USERID frontend

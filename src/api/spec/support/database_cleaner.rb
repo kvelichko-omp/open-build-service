@@ -18,7 +18,7 @@ RSpec.configure do |config|
     # For feature test we use deletion instead of transactions because the
     # test suite and the capybara driver do not use the same server thread.
     DatabaseCleaner.strategy = if example.metadata[:type] == :feature || example.metadata[:type] == :migration || example.metadata[:thinking_sphinx] == true
-                                 # Omit truncating what we have set up in db/seeds.rb except users and roles_user
+                                 # Omit truncating what we have set up in db/seeds.rb
                                  [:deletion, { except: STATIC_TABLES }]
                                else
                                  :transaction
@@ -38,7 +38,7 @@ RSpec.configure do |config|
     create(:obs_attrib_type, name: 'UpdateProject')
     create(:obs_attrib_type, name: 'VeryImportantProject')
     create(:obs_attrib_type, name: 'DelegateRequestTarget')
-    Configuration.update(allow_user_to_create_home_project: false)
+    Configuration.first_or_create(name: 'private', title: 'Open Build Service').update(allow_user_to_create_home_project: false)
   end
 
   config.after do

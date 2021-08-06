@@ -105,7 +105,7 @@ module Event
     end
 
     def initialize(attribs)
-      attributes = attribs.dup
+      attributes = attribs.dup.with_indifferent_access
       super()
       self.created_at = attribs[:time] if attributes[:time]
       attributes.delete :eventtype
@@ -169,6 +169,13 @@ module Event
       save if self.undone_jobs.positive?
     end
 
+    def mark_job_done!
+      return unless undone_jobs.positive?
+
+      self.undone_jobs -= 1
+      save!
+    end
+
     # to be overwritten in subclasses
     def subject
       'Build Service Notification'
@@ -220,23 +227,23 @@ module Event
     end
 
     def maintainers
-      Rails.logger.debug "Maintainers #{payload.inspect}"
+      Rails.logger.debug { "Maintainers #{payload.inspect}" }
       ret = _roles('maintainer', payload['project'], payload['package'])
-      Rails.logger.debug "Maintainers ret #{ret.inspect}"
+      Rails.logger.debug { "Maintainers ret #{ret.inspect}" }
       ret
     end
 
     def bugowners
-      Rails.logger.debug "Maintainers #{payload.inspect}"
+      Rails.logger.debug { "Maintainers #{payload.inspect}" }
       ret = _roles('bugowner', payload['project'], payload['package'])
-      Rails.logger.debug "Maintainers ret #{ret.inspect}"
+      Rails.logger.debug { "Maintainers ret #{ret.inspect}" }
       ret
     end
 
     def readers
-      Rails.logger.debug "Readers #{payload.inspect}"
+      Rails.logger.debug { "Readers #{payload.inspect}" }
       ret = _roles('reader', payload['project'])
-      Rails.logger.debug "Readers ret #{ret.inspect}"
+      Rails.logger.debug { "Readers ret #{ret.inspect}" }
       ret
     end
 
@@ -345,12 +352,10 @@ end
 #  undone_jobs :integer          default(0)
 #  created_at  :datetime         indexed
 #  updated_at  :datetime
-#  package_id  :integer          indexed
 #
 # Indexes
 #
 #  index_events_on_created_at  (created_at)
 #  index_events_on_eventtype   (eventtype)
 #  index_events_on_mails_sent  (mails_sent)
-#  index_events_on_package_id  (package_id)
 #

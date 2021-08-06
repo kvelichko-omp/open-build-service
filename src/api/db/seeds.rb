@@ -64,7 +64,7 @@ puts 'Seeding roles_users table...'
 RolesUser.where(user_id: admin.id, role_id: admin_role.id).first_or_create
 
 puts 'Seeding static_permissions table...'
-['status_message_create', 'set_download_counters', 'download_binaries', 'source_access', 'access',
+['status_message_create', 'download_binaries', 'source_access', 'access',
  'global_change_project', 'global_create_project', 'global_change_package', 'global_create_package',
  'change_project', 'create_project', 'change_package', 'create_package'].each do |sp_title|
   StaticPermission.where(title: sp_title).first_or_create
@@ -151,9 +151,9 @@ at.attrib_type_modifiable_bies.where(user_id: admin.id).first_or_create
 at = ans.attrib_types.where(name: 'EmbargoDate').first_or_create(value_count: 1)
 at.attrib_type_modifiable_bies.where(role_id: maintainer_role.id).first_or_create
 at = ans.attrib_types.where(name: 'DelegateRequestTarget').first_or_create
-at.attrib_type_modifiable_bies.where(user_id: maintainer_role.id).first_or_create
+at.attrib_type_modifiable_bies.where(role_id: maintainer_role.id).first_or_create
 at = ans.attrib_types.where(name: 'AllowSubmitToMaintenanceRelease').first_or_create
-at.attrib_type_modifiable_bies.where(user_id: maintainer_role.id).first_or_create
+at.attrib_type_modifiable_bies.where(role_id: maintainer_role.id).first_or_create
 
 at = ans.attrib_types.where(name: 'OwnerRootProject').first_or_create
 at.attrib_type_modifiable_bies.where(user_id: admin.id).first_or_create
@@ -327,6 +327,6 @@ IssueTracker.where(name: 'lf').first_or_create(description: 'Linux Foundation Bu
                                                label: 'lf#@@@', show_url: 'https://developerbugs.linuxfoundation.org/show_bug.cgi?id=@@@')
 IssueTracker.where(name: 'gh').first_or_create(description: 'Generic Github Tracker',
                                                kind: 'github',
-                                               regex: '(?:gh|github)#(\w+\/\w+#\d+)',
+                                               regex: '(?:gh|github)#([\w-]+\/[\w-]+#\d+)',
                                                url: 'https://www.github.com',
                                                label: 'gh#@@@', show_url: 'https://github.com/@@@')

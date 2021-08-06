@@ -57,30 +57,41 @@ RSpec.describe TriggerControllerService::ScmExtractor do
           pull_request: {
             head: {
               repo: {
-                full_name: 'danidoni/test_repo',
-                html_url: 'https://github.com/openSUSE/open-build-service'
+                full_name: 'iggy/source_repo'
               },
               ref: 'add-changes',
               sha: '9e0ea1fd99c9000cbb8b8c9d28763d0ddace0b65'
             },
             base: {
+              repo: {
+                full_name: 'iggy/target_repo'
+              },
               ref: 'main'
             }
           },
-          number: 4
+          project: {
+            http_url: 'https://gitlab.com/eduardoj2/test.git',
+            id: 26_212_710,
+            path_with_namespace: 'eduardoj2/test'
+          },
+          number: 4,
+          sender: {
+            url: 'https://api.github.com'
+          }
         }
       end
       let(:expected_hash) do
         {
           scm: 'github',
-          repo_url: 'https://github.com/openSUSE/open-build-service',
           commit_sha: '9e0ea1fd99c9000cbb8b8c9d28763d0ddace0b65',
           pr_number: 4,
           source_branch: 'add-changes',
           target_branch: 'main',
           action: 'opened',
-          repository_full_name: 'danidoni/test_repo',
-          event: 'pull_request'
+          source_repository_full_name: 'iggy/source_repo',
+          target_repository_full_name: 'iggy/target_repo',
+          event: 'pull_request',
+          api_endpoint: 'https://api.github.com'
         }
       end
 
@@ -97,7 +108,6 @@ RSpec.describe TriggerControllerService::ScmExtractor do
           object_kind: 'merge_request',
           project: {
             http_url: 'https://gitlab.com/eduardoj2/test.git',
-            id: 26_212_710,
             path_with_namespace: 'eduardoj2/test'
           },
           object_attributes: {
@@ -105,6 +115,7 @@ RSpec.describe TriggerControllerService::ScmExtractor do
               id: '4b486afefa44177f23b4388d2147ae42407e7f64'
             },
             iid: 3,
+            source_project_id: 26_212_710,
             source_branch: 'nuevo',
             target_branch: 'master',
             action: 'open'
@@ -148,13 +159,15 @@ RSpec.describe TriggerControllerService::ScmExtractor do
       let(:event) { 'merge_request' }
       let(:payload) do
         {
+          project: {
+            http_url: 'https://gitlab.com/eduardoj2/test.git'
+          }
         }
       end
       let(:expected_hash) do
         {
           scm: 'gitlab',
           object_kind: nil,
-          http_url: nil,
           commit_sha: nil,
           pr_number: nil,
           source_branch: nil,
@@ -162,7 +175,9 @@ RSpec.describe TriggerControllerService::ScmExtractor do
           action: nil,
           project_id: nil,
           path_with_namespace: nil,
-          event: 'merge_request'
+          event: 'merge_request',
+          api_endpoint: 'https://gitlab.com',
+          http_url: 'https://gitlab.com/eduardoj2/test.git'
         }
       end
 

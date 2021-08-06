@@ -102,6 +102,7 @@ sub check {
     return ('broken', 'no config');
   }
   $bconf->{'type'} = 'kiwi';
+  $bconf->{'no_vminstall_expand'} = 1 if @{$repo->{'path'} || []};
 
   my $pool = BSSolv::pool->new();
   $pool->settype('deb') if $bconf->{'binarytype'} eq 'deb';
@@ -270,6 +271,8 @@ sub check {
   my ($state, $data) = BSSched::BuildJob::metacheck($ctx, $packid, $pdata, 'kiwi-image', \@new_meta, [ $bconf, \@edeps, $pool, \%dep2pkg, $cbdep, $cprp, $unorderedrepos ]);
   if ($state eq 'scheduled') {
     my $dods = BSSched::DoD::dodcheck($ctx, $pool, $myarch, @edeps);
+    return ('blocked', $dods) if $dods;
+    $dods = BSSched::DoD::dodcheck($ctx, $ctx->{'pool'}, $myarch, $cbdep->{'name'}) if $cbdep;
     return ('blocked', $dods) if $dods;
   }
   return ($state, $data);

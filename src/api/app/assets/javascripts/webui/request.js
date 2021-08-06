@@ -105,5 +105,52 @@ function requestAddAutocomplete(autocompleteElement) { // jshint ignore:line
     var selected = $(autocompleteElement+' option:selected').attr('value');
     $('.' + selected).removeClass('d-none');
     $('.hideable input:visible').removeAttr('disabled');
+    if ($('#review_package').is(':visible') && !$('#review_project').val()) {
+      $('#review_package').attr('disabled', true);
+    }
+  });
+}
+
+$(document).ready(function(){
+  var element = $('.bs-request-actions li:first-child a:first-child');
+  if (element.length !== 0){
+    loadDiffs($(element));
+  }
+  $('.request-tab[data-toggle="tab"]').on('shown.bs.tab', function () {
+    var diffs = $(this).data('tab-pane-id');
+    var tabPanes = $('.tab-content.sourcediff .tab-pane.sourcediff');
+
+    if (Object.entries($('#'+diffs)).length === 0) {
+      $.each( tabPanes, function(i){
+        $(tabPanes[i]).removeClass('active');
+      });
+      loadDiffs($(this));
+    } else {
+      $.each( tabPanes, function(i){
+        if(tabPanes[i].id !== diffs) {
+          $(tabPanes[i]).removeClass('active');
+        }
+      });
+    }
+  });
+});
+
+function loadDiffs(element){
+  $('.loading-diff').removeClass('invisible');
+  var index = element.data('index');
+  var url = element.data('url') + '?index=' + index;
+  var diffLimit = $('.sourcediff').data('diff-limit');
+  var diffToSuperseded = element.data('diff-to-superseded');
+  if(diffLimit){
+    url = url + '&full_diff=' + diffLimit;
+  }
+  if(diffToSuperseded){
+    url = url + '&diff_to_superseded=' + diffToSuperseded;
+  }
+  $.ajax({
+    url: url,
+    success: function(){
+      $('.loading-diff').addClass('invisible');
+    }
   });
 }

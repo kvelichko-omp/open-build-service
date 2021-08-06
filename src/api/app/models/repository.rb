@@ -62,6 +62,13 @@ class Repository < ApplicationRecord
     nil
   end
 
+  def self.find_by_project_and_name!(project, repo)
+    result = find_by_project_and_name(project, repo)
+    return ActiveRecord::RecordNotFound if result.blank?
+
+    result
+  end
+
   def self.find_by_project_and_path(project, path)
     not_remote.joins(:path_elements).where(project: project, path_elements: { link: path })
   end
@@ -73,6 +80,17 @@ class Repository < ApplicationRecord
     # does not exist, so let's create it
     project = Project.deleted_instance
     project.repositories.find_or_create_by!(name: 'deleted')
+  end
+
+  def self.new_from_distribution(distribution)
+    target_repository = find_by_project_and_name!(distribution.project, distribution.repository)
+    distribution_repository = new(name: distribution.reponame)
+    distribution_repository.path_elements.build(link: target_repository)
+    distribution.architectures.each do |architecture|
+      distribution_repository.repository_architectures.build(architecture: architecture)
+    end
+
+    distribution_repository
   end
 
   def cleanup_before_destroy
@@ -288,10 +306,10 @@ end
 # Table name: repositories
 #
 #  id                  :integer          not null, primary key
-#  block               :string(5)
-#  linkedbuild         :string(9)
+#  block               :string
+#  linkedbuild         :string
 #  name                :string(255)      not null, indexed => [db_project_id, remote_project_name]
-#  rebuild             :string(10)
+#  rebuild             :string
 #  remote_project_name :string(255)      default(""), not null, indexed => [db_project_id, name], indexed
 #  required_checks     :string(255)
 #  db_project_id       :integer          not null, indexed => [name, remote_project_name]

@@ -68,6 +68,7 @@ OBSApi::Application.routes.draw do
     post 'trigger/release' => 'trigger#create'
     post 'trigger/runservice' => 'trigger#create'
     post 'trigger/webhook' => 'trigger#create'
+    post 'trigger/workflow' => 'trigger_workflow#create'
 
     ### /issue_trackers
     resources :issue_trackers, only: [:index, :show, :create, :update, :destroy], param: :name do
@@ -78,10 +79,6 @@ OBSApi::Application.routes.draw do
     # Routes for statistics
     # ---------------------
     controller :statistics do
-      # Download statistics
-      #
-      get 'statistics/download_counter' => :download_counter
-
       # Timestamps
       #
       get 'statistics/added_timestamp/:project(/:package)' => :added_timestamp, constraints: cons
@@ -94,10 +91,6 @@ OBSApi::Application.routes.draw do
       # Activity
       #
       get 'statistics/activity/:project(/:package)' => :activity, constraints: cons
-
-      # Newest stats
-      #
-      get 'statistics/newest_stats' => :newest_stats
 
       get 'statistics' => :index
       get 'statistics/highest_rated' => :highest_rated
@@ -176,11 +169,18 @@ OBSApi::Application.routes.draw do
 
     ### /distributions
 
-    put '/distributions' => 'distributions#upload'
-    # as long as the distribution IDs are integers, there is no clash
-    get '/distributions/include_remotes' => 'distributions#include_remotes'
-    # update is missing here
-    resources :distributions, only: [:index, :show, :create, :destroy]
+    resources :distributions, except: [:new, :edit] do
+      collection do
+        get 'include_remotes'
+        put 'bulk_replace' => :bulk_replace
+        # This GET routes gives us a poor mans osc interface for bulk replacing...
+        # Like: osc api -e /distributions/bulk_replace
+        get 'bulk_replace' => :index
+        # This PUT route is for backward compatiblity, it was traditionally
+        # used for bulk replacing distributions.
+        put '' => :bulk_replace
+      end
+    end
 
     ### /mail_handler
 
